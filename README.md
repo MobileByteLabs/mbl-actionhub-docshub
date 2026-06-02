@@ -1,45 +1,77 @@
 # mbl-actionhub-docshub
 
-> Reusable workflows + tooling for publishing repo docs to GitHub Wiki (and future doc surfaces). Sister to [`mbl-actionhub`](https://github.com/MobileByteLabs/mbl-actionhub), [`mbl-actionhub-bump-version`](https://github.com/MobileByteLabs/mbl-actionhub-bump-version), [`mbl-actionhub-resolve-version`](https://github.com/MobileByteLabs/mbl-actionhub-resolve-version).
+> Composite action: publish a repo's `docs/` to its GitHub Wiki, with collision-safe link rewriting + auto-generated `_Sidebar.md`.
 
-Consumed via the standard `uses: …@v<tag>` pattern. One source of truth; consumers pin a version + control upgrade pace.
+Sister to [`mbl-actionhub-bump-version`](https://github.com/MobileByteLabs/mbl-actionhub-bump-version) + [`mbl-actionhub-resolve-version`](https://github.com/MobileByteLabs/mbl-actionhub-resolve-version) — composite actions consumed BY the reusable workflows in [`mbl-actionhub`](https://github.com/MobileByteLabs/mbl-actionhub).
 
-## What's here today
+## Architecture
 
-| File | Purpose |
-|------|---------|
-| `.github/workflows/sync-docs-to-wiki.yml` | Reusable workflow — mirrors a caller's `docs/` to its GitHub Wiki with collision-safe link rewriting + auto-generated `_Sidebar.md` |
-| `.github/scripts/rewrite-wiki-links.py` | Bundled Python rewriter (~250 LOC) — auto-derives wiki URL from `$GITHUB_REPOSITORY`; detects basename collisions; flattens to `/wiki/{slug}` |
-| `.github/workflows/ci.yml` | Self-test — yaml-lint + python syntax + smoke against the in-repo `tests/fixtures/sample-docs/` |
+```
+   ┌──────────────────────────────────────────────────────────┐
+   │  Consumer repo (e.g. KmpToolkit)                         │
+   │    .github/workflows/sync-docs-to-wiki.yml               │
+   │      jobs.sync.uses: MobileByteLabs/mbl-actionhub        │
+   │                       /.github/workflows/                │
+   │                       sync-docs-to-wiki.yml@v1.x         │
+   └────────────────────────┬─────────────────────────────────┘
+                            │ (reusable workflow)
+                            ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │  mbl-actionhub                                           │
+   │    .github/workflows/sync-docs-to-wiki.yml               │
+   │      - actions/checkout@v4                               │
+   │      - uses: MobileByteLabs/mbl-actionhub-docshub@v0.x   │
+   └────────────────────────┬─────────────────────────────────┘
+                            │ (composite action)
+                            ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │  mbl-actionhub-docshub  ← YOU ARE HERE                   │
+   │    action.yml                                            │
+   │    .github/scripts/rewrite-wiki-links.py                 │
+   │      1. rewrite docs/ links → /wiki/ URLs                │
+   │      2. auto-generate _Sidebar.md                        │
+   │      3. push .wiki-build/ → wiki                         │
+   └──────────────────────────────────────────────────────────┘
+```
 
-## Consumer surface
+## Direct usage (uncommon — most consumers route through mbl-actionhub)
+
+```yaml
+- uses: actions/checkout@v4
+- uses: MobileByteLabs/mbl-actionhub-docshub@v0.2.0
+  with:
+    docs-dir: docs            # default
+    sidebar-mode: auto        # auto | consumer-authored | none
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Composite actions can't read `secrets.GITHUB_TOKEN` directly — the caller must pass it explicitly via `with: token:`.
+
+## Recommended usage — via mbl-actionhub reusable workflow
 
 ```yaml
 # .github/workflows/sync-docs-to-wiki.yml in YOUR repo:
 name: Sync docs to Wiki
-
 on:
   push:
     branches: [development]
     paths: ['docs/**']
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   sync:
-    uses: MobileByteLabs/mbl-actionhub-docshub/.github/workflows/sync-docs-to-wiki.yml@v0.1.0
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/sync-docs-to-wiki.yml@v1.8.0
 ```
 
-That's it. 12 lines. The reusable workflow handles everything: checkout, link rewriting, slug collision detection, `_Sidebar.md` auto-generation, wiki push.
+The reusable workflow handles the `actions/checkout` + token plumbing for you. 12 lines total.
 
 ## One-time per-consumer bootstrap (GitHub UI)
 
-GitHub doesn't initialize a repo's wiki until a human creates the first page. Without this, the workflow's first run fails with `Repository not found`.
+GitHub doesn't initialize a repo's wiki until a human creates the first page. Without this, the first run fails with `Repository not found`.
 
-1. **Settings → Features → Wikis** — enable the checkbox
-2. **Wiki tab → "Create the first page"** → save anything (e.g. title "Home", body "TBD"). The workflow will overwrite it on the next push.
+1. Settings → Features → Wikis (enable)
+2. Wiki tab → "Create the first page" → save anything
 
 ## Inputs
 
@@ -47,10 +79,11 @@ GitHub doesn't initialize a repo's wiki until a human creates the first page. Wi
 |-------|---------|-------------|
 | `docs-dir` | `docs` | Source directory in the caller |
 | `sidebar-mode` | `auto` | `auto` (generate `_Sidebar.md` if absent) · `consumer-authored` (require `docs/_Sidebar.md`, fail otherwise) · `none` (skip sidebar) |
+| `token` | — (required) | GitHub token with `contents:write` on the wiki repo. Pass `${{ secrets.GITHUB_TOKEN }}` from the calling workflow. |
 
 ## What the rewriter does
 
-GitHub Wiki indexes every `.md` file by **basename only** — subdirectory context is dropped. Relative links like `[text](sub-dir/file.md)` break: 404 → `raw.githubusercontent.com` fallback, OR silent redirect to wiki Home. The rewriter:
+GitHub Wiki indexes every `.md` file by **basename only** — subdirectory context is dropped. Relative links like `[text](sub-dir/file.md)` would 404 → `raw.githubusercontent.com` fallback OR silent redirect to wiki Home. The rewriter:
 
 - Auto-derives wiki URL from `$GITHUB_REPOSITORY` (CI) / `git remote get-url origin` (local)
 - Detects basename collisions across the docs tree + slugifies with subdir prefix when needed: `docs/foo/README.md` → `/wiki/foo-README`; bare basename when collision-free
@@ -61,24 +94,15 @@ GitHub Wiki indexes every `.md` file by **basename only** — subdirectory conte
 
 ## Version policy
 
-- **`v0.x`** — still evolving. Minor bumps may include breaking changes. Caller should re-test wiki on bump.
-- **`v1.0.0+`** (future) — semver-clean: breaking changes only on major bumps.
-- **`@main`** — bleeding edge; not recommended for production callers.
-- **Always pin a specific tag** — `@v0.1.0`, never `@main` or `@v0`.
-
-The bundled rewriter script is checked out at `${{ github.workflow_sha }}` — the same commit that defines the workflow. **Script version = workflow version. Always.** A consumer pinned to `@v0.1.0` gets exactly the script that shipped with `@v0.1.0`. Zero desync possible.
+- **`v0.x`** — still evolving; minor bumps may include breaking changes (script flag names, default behavior). Caller should re-test wiki on bump.
+- **`v1.0.0+`** (future) — semver-clean.
+- **`@main`** — bleeding edge; not for production.
+- **Always pin a specific tag** — `@v0.2.0`.
 
 ## Roadmap (what could live here later)
 
 - API doc generation (Dokka → markdown → wiki)
 - Doc coverage gate (% of public symbols with KDoc)
-- Cross-repo doc inventory (one-pager: which docs each library publishes)
+- Cross-repo doc inventory
 - Broken-link scanner
 - Confluence / Notion / GitHub Pages alternates
-
-## Provenance
-
-Originated 2026-06 in worker-kmp's `docs/` → wiki sync work. Lessons learned:
-- worker-kmp PRs [#32](https://github.com/MobileByteLabs/worker-kmp/pull/32) (drop invalid `default-branch:` input), [#34](https://github.com/MobileByteLabs/worker-kmp/pull/34) (absolute URLs in `_Sidebar`), [#35](https://github.com/MobileByteLabs/worker-kmp/pull/35) (basename slugs), [#41](https://github.com/MobileByteLabs/worker-kmp/pull/41) (close infinite refresh-PR loop)
-- Then forked into `mbl-library-template-kmp`, `KmpToolkit`, `kmp-product-flavors`
-- Then consolidated here, separate from `mbl-actionhub` to keep scope clean

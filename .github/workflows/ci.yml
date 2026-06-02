@@ -1,4 +1,4 @@
-# Self-test for the bundled rewriter + reusable workflow shape.
+# Self-test for the composite action + bundled rewriter.
 # Runs on every PR to main and on every push to main.
 
 name: CI
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Python syntax check
-        run: python3 -c "import ast, sys; ast.parse(open('.github/scripts/rewrite-wiki-links.py').read())"
+        run: python3 -c "import ast; ast.parse(open('.github/scripts/rewrite-wiki-links.py').read())"
 
       - name: Run rewriter against fixture
         env:
@@ -28,7 +28,7 @@ jobs:
         run: |
           python3 .github/scripts/rewrite-wiki-links.py tests/fixtures/sample-docs .wiki-build
 
-      - name: Assert collision-safe slugs (sub-a-README + sub-b-README)
+      - name: Assert collision-safe slugs
         run: |
           test -f .wiki-build/sub-a-README.md
           test -f .wiki-build/sub-b-README.md
@@ -53,7 +53,6 @@ jobs:
 
       - name: Assert out-of-tree links preserved
         run: |
-          # `../../external/file.md` must NOT be rewritten — it's outside the docs tree
           grep -q "external/file.md" .wiki-build/Home.md
           echo "✓ out-of-tree links preserved"
 
@@ -71,6 +70,24 @@ jobs:
           grep -q "Example/Repo/wiki/migration" .wiki-build/Home.md
           echo "✓ internal links rewritten to wiki URLs"
 
+  composite-action-shape:
+    name: Composite action.yml is well-formed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate action.yml
+        run: |
+          python3 -c "
+          import yaml
+          a = yaml.safe_load(open('action.yml'))
+          assert a['runs']['using'] == 'composite', 'action.yml must declare runs.using=composite'
+          assert 'docs-dir' in a['inputs'], 'docs-dir input missing'
+          assert 'sidebar-mode' in a['inputs'], 'sidebar-mode input missing'
+          assert 'token' in a['inputs'] and a['inputs']['token']['required'] == True, 'token input must be required'
+          assert any('rewrite-wiki-links.py' in s.get('run', '') for s in a['runs']['steps']), 'rewriter step missing'
+          print('✓ action.yml is a well-formed composite action with the expected inputs + steps')
+          "
+
   yaml-lint:
     name: Workflow YAML lint
     runs-on: ubuntu-latest
@@ -78,4 +95,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           pip install yamllint==1.35.1
-          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" .github/workflows/
+          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" .github/workflows/ action.yml
