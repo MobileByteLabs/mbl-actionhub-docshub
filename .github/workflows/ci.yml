@@ -1,0 +1,81 @@
+# Self-test for the bundled rewriter + reusable workflow shape.
+# Runs on every PR to main and on every push to main.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rewriter-smoke:
+    name: Rewriter smoke test (fixture sample-docs/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python syntax check
+        run: python3 -c "import ast, sys; ast.parse(open('.github/scripts/rewrite-wiki-links.py').read())"
+
+      - name: Run rewriter against fixture
+        env:
+          WIKI_BASE: "https://github.com/Example/Repo/wiki"
+        run: |
+          python3 .github/scripts/rewrite-wiki-links.py tests/fixtures/sample-docs .wiki-build
+
+      - name: Assert collision-safe slugs (sub-a-README + sub-b-README)
+        run: |
+          test -f .wiki-build/sub-a-README.md
+          test -f .wiki-build/sub-b-README.md
+          test ! -f .wiki-build/README.md
+          echo "✓ collision-safe slugs"
+
+      - name: Assert non-colliding basenames stay bare
+        run: |
+          test -f .wiki-build/overview.md
+          test -f .wiki-build/Home.md
+          test -f .wiki-build/quick-start.md
+          test -f .wiki-build/migration.md
+          echo "✓ bare slugs for unique basenames"
+
+      - name: Assert sidebar auto-generated
+        run: |
+          test -f .wiki-build/_Sidebar.md
+          grep -q "Sub A" .wiki-build/_Sidebar.md
+          grep -q "Sub B" .wiki-build/_Sidebar.md
+          grep -q "Home" .wiki-build/_Sidebar.md
+          echo "✓ _Sidebar.md auto-generated with section grouping"
+
+      - name: Assert out-of-tree links preserved
+        run: |
+          # `../../external/file.md` must NOT be rewritten — it's outside the docs tree
+          grep -q "external/file.md" .wiki-build/Home.md
+          echo "✓ out-of-tree links preserved"
+
+      - name: Assert code-block + inline-code links NOT rewritten
+        run: |
+          grep -q "code-block-link" .wiki-build/Home.md
+          grep -q "should-not-rewrite.md" .wiki-build/Home.md
+          grep -q "also-not-rewritten.md" .wiki-build/Home.md
+          echo "✓ code-context links protected"
+
+      - name: Assert internal links rewritten
+        run: |
+          grep -q "Example/Repo/wiki/quick-start" .wiki-build/Home.md
+          grep -q "Example/Repo/wiki/overview" .wiki-build/Home.md
+          grep -q "Example/Repo/wiki/migration" .wiki-build/Home.md
+          echo "✓ internal links rewritten to wiki URLs"
+
+  yaml-lint:
+    name: Workflow YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip install yamllint==1.35.1
+          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" .github/workflows/
