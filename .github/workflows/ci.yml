@@ -15,7 +15,7 @@ permissions:
 jobs:
   rewriter-smoke:
     name: Rewriter smoke test (fixture sample-docs/)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +72,7 @@ jobs:
 
   composite-action-shape:
     name: Composite action.yml is well-formed
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - name: Validate action.yml
@@ -90,7 +90,7 @@ jobs:
 
   yaml-lint:
     name: Workflow YAML lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - run: |
